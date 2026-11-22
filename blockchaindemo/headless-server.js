@@ -45,9 +45,19 @@ p2p.onChange = (reason, detail = {}) => {
 let persistLatestChain = () => {};
 function initHttpServer(port) {
   const app = express();
-  const chainFile = path.join(__dirname, ".chain-data.json");
+  // 数据文件位置：托管平台可挂载磁盘后，用 BLOCKCHAIN_DATA_FILE 指向持久化目录
+  const chainFile = process.env.BLOCKCHAIN_DATA_FILE || path.join(__dirname, ".chain-data.json");
   app.use(cors());
   app.use(express.json());
+
+  // 兼容前端以 /api 前缀发起的请求（Vite 开发代理的约定）。
+  // 有了这段重写，开发模式下的 /api/blocks 和单端口模式下的 /blocks 走同一套路由。
+  app.use((req, res, next) => {
+    if (req.url === "/api" || req.url.startsWith("/api/")) {
+      req.url = req.url.slice(4) || "/";
+    }
+    next();
+  });
 
   // Server-Sent Events：让页面在 CLI 挖矿或 P2P 收到新区块时立即刷新
   app.get("/events", (req, res) => {
@@ -218,13 +228,57 @@ function initHttpServer(port) {
     res.send({ removed: true, peer: address });
   });
 
+  // ── 单端口模式：把已构建的前端（frontend/dist）一起托管 ──────────────
+  // 存在 dist 时，直接打开 http://localhost:3001 就能看到完整界面，
+  // 不需要再单独运行 `npm run dev` 启动前端服务。
+  const distDir = path.join(__dirname, "..", "frontend", "dist");
+  const hasFrontend = fs.existsSync(path.join(distDir, "index.html"));
+  if (hasFrontend) {
+    app.use(express.static(distDir, { extensions: ["html"] }));
+
+    const API_PATHS = [
+      "/blocks",
+      "/activity",
+      "/stats",
+      "/mineBlock",
+      "/validate",
+      "/peers",
+      "/nodeInfo",
+      "/addPeer",
+      "/removePeer",
+      "/events",
+    ];
+
+    // SPA 兜底：非接口的 GET 请求一律返回 index.html，保证前端路由可刷新
+    app.use((req, res, next) => {
+      if (req.method !== "GET" && req.method !== "HEAD") return next();
+      if (API_PATHS.some((p) => req.path === p || req.path.startsWith(`${p}/`))) return next();
+      res.sendFile(path.join(distDir, "index.html"));
+    });
+  }
+
   apiServer = app.listen(port, () => {
     console.log(`'listening http on port` + port);
+    if (hasFrontend) {
+      console.log(`前端界面（单端口）：http://localhost:${port}`);
+    } else {
+      console.log(`未找到 frontend/dist，仅提供 API。请先执行：cd frontend && npm run build`);
+    }
   });
 }
 
+// 端口优先级：云平台注入的 PORT > 项目自定义变量 > 本地默认值
 const p2pPort = Number(process.env.BLOCKCHAIN_P2P_PORT) || 6001;
-const apiPort = Number(process.env.BLOCKCHAIN_API_PORT) || 3001;
-p2p.startServer(p2pPort);
+const apiPort = Number(process.env.PORT) || Number(process.env.BLOCKCHAIN_API_PORT) || 3001;
+// 大多数托管平台只对外开放一个 HTTP 端口，可用该变量关闭 P2P 以避免无意义的内网监听
+if (process.env.BLOCKCHAIN_P2P_DISABLED === "1") {
+  console.log("P2P 已按配置关闭（BLOCKCHAIN_P2P_DISABLED=1）");
+} else {
+  p2p.startServer(p2pPort);
+}
 initHttpServer(apiPort);
-console.log(`Headless blockchain node started: P2P ${p2pPort}, API ${apiPort}`);
+console.log(
+  `Headless blockchain node started: P2P ${
+    process.env.BLOCKCHAIN_P2P_DISABLED === "1" ? "disabled" : p2pPort
+  }, API ${apiPort}`,
+);

@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: chainpulse
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        value: "3001"
+      - key: BLOCKCHAIN_P2P_DISABLED
+        value: "1"

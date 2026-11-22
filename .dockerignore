@@ -1,0 +1,9 @@
+**/node_modules
+**/dist
+.git
+.gitignore
+*.bak
+*.log
+.vscode
+blockchaindemo/.chain-data.json
+一键启动.bat
